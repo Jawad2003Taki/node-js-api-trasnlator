@@ -8,7 +8,16 @@ const rateLimit = require("express-rate-limit");
 const hpp = require("hpp");
 const { translate } = require("@vitalets/google-translate-api");
 
+// Example proxy URL (replace with your own)
+const proxy = process.env.PROXY_URL || "http://103.152.112.162:80";
+
+const { HttpProxyAgent } = require("http-proxy-agent");
+
+const agent = new HttpProxyAgent("http://103.152.112.162:80");
+
 const app = express();
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ----------- Security Middlewares ------------
 app.use(helmet());
@@ -34,33 +43,54 @@ app.get("/", (req, res) => {
   res.json({ message: "Secure Express API is running 🚀" });
 });
 
-// Translate API - supports array of target languages
+/**
+ * Translate API
+ * Input:
+ * {
+ *   "data": { "name": "name of something", "description": "description of something" },
+ *   "to": ["ar", "fr", "tr"]
+ * }
+ *
+ * Output:
+ * {
+ *   "ar": { "name": "اسم شيء ما", "description": "وصف شيء ما" },
+ *   "fr": { "name": "nom de quelque chose", "description": "description de quelque chose" },
+ *   "tr": { "name": "bir şeyin adı", "description": "bir şeyin açıklaması" }
+ * }
+ */
 app.post("/translate", async (req, res) => {
   try {
-    const { text, to } = req.body;
+    const { data, to } = req.body;
 
-    if (!text || !to) {
+    if (!data || typeof data !== "object") {
       return res
         .status(400)
-        .json({ error: "Missing 'text' or 'to' languages" });
+        .json({ error: "Missing or invalid 'data' object" });
+    }
+    if (!to || !Array.isArray(to) || to.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "Missing or invalid 'to' languages array" });
     }
 
-    // Ensure `to` is always an array
-    const languages = Array.isArray(to) ? to : [to];
-
-    // Translate text into all requested languages
     const translations = {};
-    for (const lng of languages) {
-      try {
-        const { text: translatedText } = await translate(text, {
-          from: "auto",
-          to: lng,
-        });
-        translations[lng] = translatedText;
-      } catch (e) {
-        translations[lng] = `❌ Failed to translate: ${e.message}`;
-      }
-    }
+
+    await Promise.all(
+      to.map(async (lng) => {
+        translations[lng] = {};
+        for (const key of Object.keys(data)) {
+          try {
+            const { text: translatedText } = await translate(data[key], {
+              to: lng,
+            });
+            translations[lng][key] = translatedText;
+            await sleep(1000);
+          } catch (e) {
+            translations[lng][key] = `❌ Failed to translate: ${e.message}`;
+          }
+        }
+      })
+    );
 
     res.json(translations);
   } catch (error) {
